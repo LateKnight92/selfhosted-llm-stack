@@ -12,24 +12,24 @@
 ```
 ┌──────────────────────────────────────┐         ┌──────────────────────────────────────────┐
 │   INFERENCE NODE  ✅ ALWAYS-ON        │   LAN   │   PROXMOX VE CLUSTER  ✅ ALWAYS-ON      │
-│   (Power-Cycling optional, s.u.)     │◄───────►│   Alle Services als LXC-Container       │
+│   (Power-Cycling zurückgestellt)     │◄───────►│   Alle Services als LXC-Container       │
 │                                      │         │                                          │
-│  • Ollama  :11434  (GPU)             │         │  jarvis-orchestrator  :8000             │
-│                                      │         │  jarvis-mcp-hub       :8080             │
-│  GPU: ≥ 8 GB VRAM (CUDA)            │         │  jarvis-webui         :3000             │
-│  RAM: ≥ 16 GB                        │         │  jarvis-wake-manager  :8090  (optional) │
-│  OS:  Ubuntu 24.04 LTS               │         │  wyoming-whisper      ← Phase 5         │
-│  PBS-Client → PBS im Cluster         │         │  wyoming-piper        ← Phase 5         │
+│  • Ollama  :11434  (GPU)             │         │  jarvis-orchestrator  :8000  ✅          │
+│                                      │         │  jarvis-mcp-hub       :8080  ✅          │
+│  GPU: GTX 1080 Ti, 11 GB VRAM        │         │  jarvis-webui         :3000  ✅          │
+│  RAM: 32 GB                          │         │  jarvis-wake-manager  :8090  (deferred)  │
+│  OS:  Ubuntu 24.04 LTS               │         │  wyoming-whisper      ← Phase 6         │
+│  PBS-Client → PBS im Cluster         │         │  wyoming-piper        ← Phase 6         │
 └──────────────────────────────────────┘         │                                          │
-                                                  │  Bestehend (empfohlen):                  │
+                                                  │  Bestehend:                              │
                                                   │    Reverse Proxy  :80/:443               │
-                                                  │    Wiki.js                               │
+                                                  │    TriliumNext (Wiki-Backend)            │
                                                   │    PBS (Proxmox Backup Server)           │
                                                   └──────────────────────────────────────────┘
                                                                   ▲
-                                                                  │ Wyoming-Protokoll (Phase 5)
-┌──────────────────────────────────────┐         ┌───────────────┼──────────────────────────┐
-│   PI ZERO 2W + ReSpeaker  Phase 5   │────────►│   wyoming-whisper  :10300               │
+                                                                  │ Wyoming-Protokoll (Phase 6)
+┌──────────────────────────────────────┐         ┌───────────────┴──────────────────────────┐
+│   PI ZERO 2W + ReSpeaker  Phase 6   │────────►│   wyoming-whisper  :10300               │
 │   wyoming-satellite (lokal)          │         │   wyoming-piper    :10200               │
 │   Wake Word: OpenWakeWord (lokal)    │         └──────────────────────────────────────────┘
 │   Mic-Array mit Beamforming          │
@@ -38,22 +38,18 @@
 
 ---
 
-## 2. Hardware-Anforderungen
+## 2. Hardware-Details
 
-### Inference Node (GPU-Rechner)
+### Inference Node — GTX 1080 Ti (11 GB VRAM)
 
-| Eigenschaft | Minimum | Empfohlen |
+| Eigenschaft | Detail | Konsequenz |
 |---|---|---|
-| GPU-VRAM | 8 GB (CUDA) | 11 GB+ |
-| RAM | 16 GB | 32 GB |
-| OS | Ubuntu 22.04 LTS | Ubuntu 24.04 LTS |
-| CUDA | ≥ 12.1 | 12.2+ |
+| Architektur | Pascal (CUDA 6.1) | Kein Flash Attention (erfordert CC 8.0+) |
+| Tensor Cores | Keine | Kein natives INT8/INT4 — reine CUDA-Quantisierung |
+| VRAM | 11 GB GDDR5X | Modellgrenze ~10 GB nach CUDA-Overhead |
+| RAM | 32 GB | RAM-Offloading möglich (langsamere Layer) |
 
-> **Hinweis Pascal-GPUs (GTX 1080 Ti u.ä.):** Kein Flash Attention (erfordert CC 8.0+),
-> kein natives INT8/INT4. Kontextfenster praktisch auf ≤ 8192 Token begrenzen.
-> Ca. 20–30% langsamer als RTX-Karten mit gleichem VRAM.
-
-**Gemessene Performance (Q4_K_M, GTX 1080 Ti / Pascal):**
+**Gemessene Performance (Q4_K_M, auf dieser Hardware):**
 
 | Modell | Token/s | VRAM | Bewertung |
 |---|---|---|---|
@@ -61,10 +57,13 @@
 | 12B | ~32 T/s | ~8.1 GB | Bestes Qualitäts-/Geschwindigkeits-Verhältnis ✅ |
 | Reasoning 14B | ~29 T/s | ~9.0 GB | Für Wiki-Synthese, Chain-of-Thought |
 | 14B | ~27 T/s | ~8.5 GB | Knapper VRAM, kaum Qualitätsgewinn ggü. 12B |
-| 30B MoE | ~19 T/s | ~17 GB | RAM-Offloading nötig |
+| 30B MoE | ~19 T/s | ~17 GB | Passt nicht ins VRAM-Budget (RAM-Offloading nötig) |
 | 22B+ Dense | ≤ 7 T/s | > 12 GB | Zu langsam für interaktiven Betrieb ❌ |
 
-**Praktische VRAM-Konfiguration:**
+> Pascal ohne Tensor Cores — ca. 20–30% langsamer als RTX-Karten gleicher VRAM-Klasse.
+> Ohne Flash Attention: Kontextfenster praktisch auf ≤ 8192 Token begrenzen.
+
+**Praktische VRAM-Konfiguration (empfohlen):**
 
 ```
 Option A — 12B Q4_K_M   ≈ 8.1 GB  ← Hauptmodell (bestes Verhältnis)
@@ -85,16 +84,16 @@ Option C — 8B + Routing-Modell gleichzeitig geladen
            Gesamt       ≈ 9.5 GB  ← kein Swap-Overhead
 
 Whisper medium  →  CPU  (~3–5 s Latenz, akzeptabel)
-TTS             →  CPU  (<0.5 s)
+Kokoro TTS      →  CPU  (<0.5 s)
 ```
 
 ### PVE-Cluster
 
-| Ressource | Minimum |
+| Ressource | Verfügbar |
 |---|---|
-| Nodes | 1–2 |
+| Nodes | 2 |
 | RAM gesamt | ≥ 20 GB |
-| Bestehende Services | Reverse Proxy (empfohlen), Wiki.js (optional) |
+| Bestehende Services | Reverse Proxy, TriliumNext, PBS |
 
 **LXC-Container RAM-Budget:**
 
@@ -102,16 +101,16 @@ TTS             →  CPU  (<0.5 s)
 jarvis-orchestrator   1.5 GB
 jarvis-mcp-hub        1.0 GB  (inkl. Wiki-Storage)
 jarvis-webui          0.8 GB  (Docker-in-LXC)
-jarvis-wake-manager   0.2 GB  (optional)
+jarvis-wake-manager   0.2 GB
 ──────────────────────────────
-Gesamt                3.5 GB
+Gesamt                3.5 GB  — problemlos innerhalb 20 GB
 ```
 
 ---
 
 ## 3. Modellauswahl
 
-### Primärmodelle (Q4_K_M)
+### Primärmodelle (GTX 1080 Ti, Q4_K_M)
 
 | Modell | VRAM | Token/s¹ | Stärke |
 |---|---|---|---|
@@ -168,7 +167,7 @@ Q8_0    → ~50% VRAM-Ersparnis, ~99% Qualität  ← nur für RAM-Offloading
 ### 4.1 Informationen abrufen
 
 Über den MCP-Hub Zugriff auf:
-- **Web-Suche** (DuckDuckGo über `ddgs` — kein API-Key nötig)
+- **Web-Suche** (SearXNG self-hosted oder Brave Search MCP)
 - **Wetter** (offene APIs, kein API-Key nötig)
 - **Kalender / Erinnerungen** (lokale ICS-Datei oder Nextcloud)
 - **News** (RSS-Feed-MCP)
@@ -196,17 +195,38 @@ Selbst gewartete Markdown-Wiki statt klassischem RAG. Details in Abschnitt 5.
 | Speicher | Vektordatenbank (Embeddings) | Markdown-Dateien (lesbar) |
 | Abfrage | Embedding-Suche → Chunk-Rückgabe | LLM liest Index → wählt Seiten → synthetisiert |
 | Wartung | Keine | LLM aktualisiert Seiten bei jedem Ingest |
-| Konsistenz | Keine (Chunks isoliert) | Cross-References, Widersprüche werden erkannt |
+| Konsistenz | Keine (Chunks isoliert) | Cross-References, Widerspruchs-Erkennung |
 | Token-Effizienz | ~70× mehr Tokens pro Query | Kompakte Wiki-Seiten, wenige Tokens |
+
+### Die Herausforderung: kleines Kontextfenster
+
+Das ist die zentrale Einschränkung beim Betrieb auf Consumer-Hardware ohne Flash Attention:
+das effektive Kontextfenster liegt bei **≤ 8 192 Token**. Das formt die gesamte Wiki-Architektur:
+
+- **Atomare Seiten**: Eine Seite = ein Konzept, angestrebt ≤ 400 Tokens — das LLM kann viele davon auf einmal überblicken
+- **Index-first**: Das LLM liest zuerst den kompakten Index, wählt dann gezielt 1–3 Seiten
+  statt alle Wiki-Inhalte blind in den Kontext zu laden
+- **Kompakter Index**: Format `path | title` (~50 Zeichen/Eintrag) hält den Index unter ~300 Zeilen nutzbar;
+  der vollständige Seiteninhalt wird erst auf Anfrage geladen
+- **Lint-Modus**: Prüft Konsistenz auf maximal 20 Seiten gleichzeitig (begrenzt durch das Kontextfenster)
+- **Langfristig (>300 Seiten)**: Relevanz-basiertes Index-Filtering nötig,
+  ähnlich wie `_select_pages_from_index` — sonst läuft der Index selbst über das Kontextfenster
+
+> Bei einem größeren Kontextfenster (z.B. durch Flash Attention auf RTX-Karten) ließe sich der
+> vollständige Index und mehrere Wiki-Seiten gleichzeitig laden — das würde die Index-first-Architektur
+> vereinfachen, ist auf Pascal-Hardware aber nicht realistisch.
 
 ### Verzeichnisstruktur
 
 ```
 /wiki-data/
 ├── raw/                    ← Quelldokumente (unveränderlich)
+│   ├── artikel_2026-05.pdf
+│   └── ...
 ├── wiki/                   ← LLM-gepflegte Seiten (Markdown)
 │   ├── index.md            ← Inhaltsverzeichnis aller Seiten
-│   ├── log.md              ← Append-only Protokoll
+│   ├── log.md              ← Append-only Protokoll (Ingests, Queries)
+│   ├── python_asyncio.md
 │   └── ...
 └── schema/
     └── AGENTS.md           ← Konventionen & Formatregeln für das LLM
@@ -239,13 +259,48 @@ fehlende Cross-References — LLM bereinigt selbst
 
 ### Implementierung als MCP-Tool
 
-Die Wiki-Tools sind im `jarvis-mcp-hub` implementiert (`wiki.py`).
-Als Backend wird Wiki.js über die GraphQL-API angebunden — die Seiten bleiben
-menschenlesbar im Browser zugänglich.
+```python
+# mcp_hub/tools/wiki.py
+from pathlib import Path
+from mcp.server import Server
+from mcp.types import Tool, TextContent
 
-> **Hinweis:** `wiki_query` und `wiki_ingest` funktionieren mit jeder Wiki.js-Instanz.
-> Als Alternative kann das `wiki/`-Verzeichnis auch direkt auf dem Dateisystem
-> gepflegt werden (Filesystem-MCP statt GraphQL).
+WIKI_PATH = Path("/data/wiki")
+
+@server.call_tool()
+async def wiki_ingest(source_path: str) -> str:
+    source = Path(source_path).read_text()
+    index = (WIKI_PATH / "wiki/index.md").read_text()
+
+    prompt = f"""Du bist der Wiki-Maintainer. Hier ist ein neues Dokument:
+
+{source}
+
+Aktuelle Wiki-Seiten (index.md):
+{index}
+
+Erstelle oder aktualisiere die relevanten Wiki-Seiten.
+Format: === wiki/seitenname.md ===\n<inhalt>"""
+
+    response = await ollama_generate(model="<reasoning-model>", prompt=prompt)
+    _write_wiki_pages(response)
+    _append_log(f"INGEST {source_path}")
+    return f"Wiki aktualisiert: {source_path}"
+
+
+@server.call_tool()
+async def wiki_query(question: str) -> str:
+    index = (WIKI_PATH / "wiki/index.md").read_text()
+
+    # Schritt 1: Relevante Seiten identifizieren (kleines Routing-Modell)
+    pages_prompt = f"index.md:\n{index}\n\nFrage: {question}\n\nWelche 3–5 Seiten sind relevant? Nur Dateinamen."
+    relevant = await ollama_generate(model="<routing-model>", prompt=pages_prompt)
+
+    # Schritt 2: Seiten laden und Antwort synthetisieren
+    pages_content = _load_pages(relevant)
+    answer_prompt = f"Wiki-Inhalt:\n{pages_content}\n\nFrage: {question}\n\nAntwort:"
+    return await ollama_generate(model="<main-model>", prompt=answer_prompt)
+```
 
 ---
 
@@ -258,10 +313,10 @@ menschenlesbar im Browser zugänglich.
 ┌──────────────────────────────────────────────────────────────────┐
 │  INFERENCE NODE (bare metal, Ubuntu 24.04)                       │
 │                                                                  │
-│  [OpenWakeWord] ──► "Hey <Name>" ──► [Whisper medium / CPU]      │
+│  [OpenWakeWord] ──► "Hey Jarvis" ──► [Whisper medium / CPU]      │
 │                                              │ Text              │
 │                                              ▼                   │
-│              HTTP POST ────────────────────────────────────► PVE│
+│              HTTP POST ──────────────────────────────────────► PVE│
 │                                                                  │
 │  PVE-Response ──► [TTS / CPU] ──► Lautsprecher                   │
 │                                                                  │
@@ -275,7 +330,7 @@ menschenlesbar im Browser zugänglich.
 ┌──────────────────────────────────────────────────────────────────┐
 │  PVE CLUSTER                                                     │
 │                                                                  │
-│  ┌────────────────────────────────────────────────────────────────┐ │
+│  ┌────────────────────────────────────────────────────────────┐ │
 │  │  jarvis-orchestrator (LangGraph, Python 3.12)              │ │
 │  │                                                            │ │
 │  │  Eingabe → Intent Router (<routing-model> via Ollama)      │ │
@@ -283,21 +338,25 @@ menschenlesbar im Browser zugänglich.
 │  │  → "Wiki?"    → Wiki-Query MCP                             │ │
 │  │  → "Code?"    → Ollama <code-model> + Filesystem MCP       │ │
 │  │  → "Direkt?"  → Ollama <main-model>                        │ │
-│  └───────────────────────┬────────────────────────────────────────────┘ │
+│  └───────────────────────┬────────────────────────────────────┘ │
 │                           │                                      │
-│         ┌─────────────────┬──────────────────┐                  │
+│         ┌─────────────────┼──────────────────┐                  │
 │         ▼                 ▼                  ▼                  │
-│  ┌───────────┐  ┌────────────┐  ┌────────────┐          │
+│  ┌─────────────┐  ┌──────────────┐  ┌──────────────┐          │
 │  │ jarvis-mcp  │  │  jarvis-     │  │  jarvis-wake │          │
 │  │    -hub     │  │  webui       │  │  -manager    │          │
 │  │             │  │  :3000       │  │  :8090       │          │
-│  │ Tools:      │  │  Chat-UI     │  │  (optional)  │          │
-│  │ • wiki_*    │  └────────────┘  └────────────┘          │
+│  │ Tools:      │  │  Chat-UI     │  │              │          │
+│  │ • wiki_*    │  └──────────────┘  └──────────────┘          │
 │  │ • web_search│                                               │
 │  │ • filesystem│                                               │
-│  └───────────┘                                               │
+│  │ • shell     │                                               │
+│  │ • git       │                                               │
+│  │ • calendar  │                                               │
+│  │ • rss_feed  │                                               │
+│  └─────────────┘                                               │
 │                                                                  │
-│  [Bestehend]  Reverse Proxy → <name>.home, api.<name>.home       │
+│  [Bestehend]  Reverse Proxy → <assistant>.home, api.<assistant>.home │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -307,22 +366,22 @@ menschenlesbar im Browser zugänglich.
 
 ### 7.1 Hinweis: WoL vs. Smart Plug
 
-Wake-on-LAN ist die elegante Lösung — setzt aber voraus, dass NIC und BIOS es
-wirklich unterstützen. Vor der Planung prüfen:
+Wake-on-LAN ist die elegante Lösung — setzt aber voraus, dass NIC und BIOS es wirklich unterstützen. Das ist nicht selbstverständlich. Vor der Planung prüfen:
 
 ```bash
 ethtool <iface> | grep "Wake-on"   # muss "g" zeigen, nicht "d"
 ```
 
 Wenn WoL nicht verfügbar ist: **Smart Plug als Alternative.**
-Im BIOS `Restore AC Power Loss → Power On` setzen. Der Rechner startet automatisch,
-sobald die Steckdose Strom gibt. Herunterfahren per Shutdown-Agent (API-Call).
+Im BIOS `Restore AC Power Loss → Power On` setzen. Der Rechner startet automatisch, sobald die Steckdose Strom gibt. Herunterfahren per Shutdown-Agent (API-Call).
 
 **WoL (wenn verfügbar) — Ubuntu, persistent via udev:**
 
 ```bash
+# Sofort aktivieren
 sudo ethtool -s <iface> wol g
 
+# Permanent
 echo 'ACTION=="add", SUBSYSTEM=="net", NAME=="<iface>", RUN+="/sbin/ethtool -s <iface> wol g"' \
      | sudo tee /etc/udev/rules.d/81-wol.rules
 ```
@@ -341,14 +400,14 @@ jarvis-wake-manager  :8090
 
 ```python
 # wake_manager/main.py
-import asyncio, httpx, os
+import asyncio, httpx
 from fastapi import FastAPI, HTTPException
 from wakeonlan import send_magic_packet  # oder: Smart-Plug-API-Call
 
 app = FastAPI()
 
-INFERENCE_MAC  = os.environ.get("INFERENCE_MAC", "")   # für WoL
-INFERENCE_IP   = os.environ.get("INFERENCE_IP", "")    # feste IP / DHCP-Reservation
+INFERENCE_MAC  = "<MAC-Adresse>"          # für WoL
+INFERENCE_IP   = "<Inference-Node-IP>"    # feste IP / DHCP-Reservation
 OLLAMA_URL     = f"http://{INFERENCE_IP}:11434"
 BOOT_TIMEOUT   = 120   # Sekunden
 IDLE_SHUTDOWN  = 1800  # 30 min Inaktivität → Auto-Shutdown
@@ -394,7 +453,7 @@ async def status():
 async def _warmup_models():
     async with httpx.AsyncClient(timeout=60) as c:
         await c.post(f"{OLLAMA_URL}/api/generate", json={
-            "model": os.environ.get("MAIN_MODEL", "gemma3:12b"),
+            "model": "<main-model>",
             "prompt": "",
             "keep_alive": "1h"
         })
@@ -403,6 +462,7 @@ async def _warmup_models():
 ### 7.3 Auto-Shutdown nach Inaktivität
 
 ```bash
+# /opt/jarvis/check_idle.sh
 #!/bin/bash
 ACTIVE=$(curl -s http://localhost:11434/api/ps | python3 -c "
 import sys, json
@@ -410,26 +470,26 @@ data = json.load(sys.stdin)
 print(len(data.get('models', [])))
 ")
 if [ "$ACTIVE" -eq "0" ]; then
-    LAST_FILE="/tmp/llm_last_active"
+    LAST_FILE="/tmp/jarvis_last_active"
     NOW=$(date +%s)
     if [ ! -f "$LAST_FILE" ]; then
         echo $NOW > "$LAST_FILE"
     else
         LAST=$(cat "$LAST_FILE")
         DIFF=$((NOW - LAST))
-        if [ $DIFF -gt 1800 ]; then
+        if [ $DIFF -gt 1800 ]; then   # 30 Minuten
             rm "$LAST_FILE"
-            logger "local-llm: Inference Node shutting down (idle)"
+            logger "Jarvis: Inference Node shutting down (idle)"
             shutdown -h now
         fi
     fi
 else
-    date +%s > /tmp/llm_last_active
+    date +%s > /tmp/jarvis_last_active
 fi
 ```
 
 ```ini
-# /etc/systemd/system/llm-idle-check.timer
+# /etc/systemd/system/jarvis-idle-check.timer
 [Timer]
 OnBootSec=15min
 OnUnitActiveSec=15min
@@ -438,15 +498,47 @@ OnUnitActiveSec=15min
 WantedBy=timers.target
 ```
 
+### 7.4 Startup-Ablauf (Ende-zu-Ende)
+
+```
+Nutzer: "Jarvis, starte das System"   (oder API: POST /wake)
+  │
+  ▼
+jarvis-orchestrator (PVE, always-on)
+  │  erkennt "wake"-Intent
+  ▼
+jarvis-wake-manager POST /wake
+  │
+  ├─ WoL / Smart Plug → Inference Node einschalten
+  │
+  ├─ Inference Node bootet (~30–60 s)
+  │   └─ systemd startet Ollama, Shutdown-Agent automatisch
+  │
+  ├─ Wake-Manager pollt GET /api/tags alle 5 s
+  │
+  ├─ Ollama antwortet → Modell vorwärmen (~15 s)
+  │
+  └─ Antwort: "System bereit."
+
+Typische Zeiten:
+  POST-Screen          ~10 s
+  Ubuntu-Boot          ~20–30 s
+  Ollama startet       ~5 s
+  Modell in VRAM       ~10–15 s
+  ─────────────────────────────
+  Gesamt bis bereit    ~50–60 s
+```
+
 ---
 
 ## 8. Backup-Strategie (PBS)
 
-Alle Komponenten werden über den **Proxmox Backup Server** gesichert.
+Alle Komponenten werden über den bestehenden **Proxmox Backup Server** gesichert.
 
 ### Inference Node: PBS-Client (Datei-Backup)
 
 ```bash
+# PBS-Client-Repository (Ubuntu 24.04 / Bookworm-Packages)
 wget https://enterprise.proxmox.com/debian/proxmox-release-bookworm.gpg \
      -O /etc/apt/trusted.gpg.d/proxmox-release-bookworm.gpg
 
@@ -457,6 +549,15 @@ apt update && apt install -y proxmox-backup-client
 ```
 
 > Kein libssl1.1-Workaround nötig bei Ubuntu 24.04 (im Gegensatz zu 22.04).
+
+**Was gesichert wird:**
+
+| Pfad | Archiv-Name | Sichern? | Begründung |
+|---|---|---|---|
+| `/etc` | `etc.pxar` | **Ja** | Ollama-Service, Netzwerk-Config |
+| `/opt/jarvis` | `jarvis.pxar` | **Ja** | Voice-Pipeline, eigene Skripte |
+| `/home/<user>` | `home.pxar` | **Ja** | Dotfiles, SSH-Keys |
+| `<ollama-models-path>` | — | **Nein** | 5–15 GB, jederzeit mit `ollama pull` neu ladbar |
 
 ```ini
 # /etc/systemd/system/pbs-backup.service
@@ -469,10 +570,20 @@ Environment="PBS_REPOSITORY=<user>@pbs!<token-id>@<pbs-ip>:<datastore>"
 Environment="PBS_ENCRYPTION_PASSWORD=<key>"
 ExecStart=/usr/bin/proxmox-backup-client backup \
   etc.pxar:/etc \
-  llm.pxar:/opt/local-llm \
+  jarvis.pxar:/opt/jarvis \
   home.pxar:/home/<user> \
   --backup-id inference-node \
   --change-detection-mode=metadata
+```
+
+```ini
+# /etc/systemd/system/pbs-backup.timer
+[Timer]
+OnCalendar=*-*-* 03:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
 ```
 
 **Empfohlene Retention-Policy:**
@@ -490,30 +601,49 @@ Monatlich:   3 Versionen
 | Container | RAM | Stack | Port | Beschreibung |
 |---|---|---|---|---|
 | `jarvis-orchestrator` | 1.5 GB | Python 3.12, LangGraph, FastAPI | 8000 | Kernlogik, Intent Routing |
-| `jarvis-mcp-hub` | 1.0 GB | Python, FastAPI, ddgs | 8080 | Alle Tools gebündelt |
+| `jarvis-mcp-hub` | 1.0 GB | Python, MCP SDK, Wiki-Storage | 8080 | Alle Tools gebündelt |
 | `jarvis-webui` | 0.8 GB | Docker-in-LXC, Open WebUI | 3000 | Chat-Frontend |
-| `jarvis-wake-manager` | 0.2 GB | Python, FastAPI, wakeonlan | 8090 | Power-Management (optional) |
-| `jarvis-voice` *(Phase 5)* | 1.0 GB | Docker, wyoming-whisper + wyoming-piper | 10300/10200 | STT + TTS |
+| `jarvis-wake-manager` | 0.2 GB | Python, FastAPI, wakeonlan | 8090 | Power-Management |
+| `jarvis-voice` *(Phase 6)* | 1.0 GB | Docker, wyoming-whisper + wyoming-piper | 10300/10200 | STT + TTS |
 
 ### Hinweis: Docker auf ZFS-LXC
 
 overlay2 und fuse-overlayfs schlagen auf ZFS fehl. Lösung: VFS-Storage-Driver.
 
 ```json
+// /etc/docker/daemon.json
 { "storage-driver": "vfs" }
 ```
 
 Runtime-Performance ist nicht betroffen — nur Image-Pull ist langsamer.
 LXC muss als **privileged** laufen. Empfohlene Mindestgröße: **20 GB Disk**.
 
+### Routing (bestehender Reverse Proxy)
+
+```
+<assistant>.home          →  jarvis-webui:3000          (Chat-UI)
+api.<assistant>.home      →  jarvis-orchestrator:8000   (REST API)
+# Ollama + Wyoming niemals nach außen — nur intern im LAN!
+```
+
 ---
 
-## 10. Sprach-Pipeline (Phase 5)
+## 10. Sprach-Pipeline
+
+### 10.1 Phase 5 — ❌ GESTRICHEN
+
+Alexa Custom Skill wurde gestrichen. Wake Word, STT und TTS laufen über Amazon-Server —
+das widerspricht dem No-Cloud-Prinzip des Projekts (vollständige Datenkontrolle).
+Ersatz: Phase 6 Wyoming Satellite (vollständig lokal, ohne Cloud-Abhängigkeit).
+
+---
+
+### 10.2 Phase 6 — Pi Zero 2W Satellite (vollständig lokal)
 
 ```
 Pi Zero 2W + ReSpeaker 2-Mic HAT
   │
-OpenWakeWord "Hey <Name>"   lokal auf Pi, CPU, <50 MB
+OpenWakeWord "Hey Jarvis"   lokal auf Pi, CPU, <50 MB
   │
 wyoming-satellite           Audio-Stream via Wyoming-Protokoll
   │  (LAN)
@@ -531,10 +661,11 @@ Gesamt: ~8–20 s — vergleichbar mit Alexa, 100% lokal
 ```
 
 ```bash
+# wyoming-satellite auf dem Pi
 pip install wyoming-satellite
 
 wyoming-satellite \
-  --name "llm-satellite" \
+  --name "jarvis-satellite" \
   --uri "tcp://0.0.0.0:10700" \
   --mic-command "arecord -r 16000 -c 1 -f S16_LE -t raw" \
   --snd-command "aplay -r 22050 -c 1 -f S16_LE -t raw" \
@@ -562,7 +693,7 @@ services:
       --uri tcp://0.0.0.0:10200
 ```
 
-**Hardware-Einkaufsliste:**
+**Hardware-Einkaufsliste (Phase 6):**
 
 | Teil | Modell | Preis |
 |---|---|---|
@@ -576,7 +707,7 @@ services:
 
 ## 11. Phasenplan
 
-### Phase 1 — Inference Node & Ollama
+### Phase 1 — Inference Node & Ollama ✅
 
 - Ubuntu 24.04 installieren, NVIDIA-Treiber + CUDA ≥ 12.1
 - Ollama installieren, im LAN exponieren (`OLLAMA_HOST=0.0.0.0`)
@@ -588,40 +719,69 @@ services:
 - Shutdown-Agent als systemd-Service einrichten
 - Idle-Check-Timer einrichten (Auto-Shutdown nach 30 min Inaktivität)
 
-### Phase 2 — PVE-Infrastruktur (Open WebUI)
+### Phase 2 — PVE-Infrastruktur (Open WebUI) ✅
 
 - LXC `jarvis-webui` erstellen (privileged, ≥20 GB, Docker)
 - Docker VFS-Storage-Driver konfigurieren (ZFS-Kompatibilität)
 - Open WebUI gegen Ollama-IP konfigurieren
-- Reverse Proxy: `<name>.home` → WebUI
+- Reverse Proxy: `<assistant>.home` → WebUI
 - Browser-Chat-Test
 
-### Phase 3 — Orchestrator & MCP-Tools
+### Phase 3 — Orchestrator & MCP-Tools ✅
 
 - LXC `jarvis-orchestrator`: Python 3.12, LangGraph, FastAPI — Port 8000
 - LXC `jarvis-mcp-hub`: FastAPI, ddgs, httpx — Port 8080
-- Open WebUI → zeigt auf Orchestrator (Ollama-kompatibler Endpoint)
-- Intent-Router: Keyword-Vorfilter + LLM-Fallback
-- Web-Suche: `ddgs` — kein API-Key nötig
+- LXC `jarvis-webui`: Open WebUI → zeigt auf Orchestrator (Modell "assistant")
+- Intent-Router: Keyword-Vorfilter + Routing-Modell-Fallback (chat / web_search / wiki_query / wiki_lint / wiki_ingest / code)
+- Web-Suche: `ddgs` (`from ddgs import DDGS`) — kein API-Key nötig
 - Streaming: `/api/chat` Ollama-kompatibler Endpoint mit StreamingResponse
+- Wake-Manager: dauerhaft zurückgestellt — Inference Node bleibt always-on (Hardware-Schutz)
 
-### Phase 4 — LLM-Wiki
+### Phase 4 — LLM-Wiki ✅
 
-- Wiki-Backend: Wiki.js via GraphQL-API (oder Dateisystem-MCP)
-- `wiki_query` MCP-Tool implementieren
-- `wiki_ingest` MCP-Tool implementieren
+- Wiki-Backend: TriliumNext ETAPI (Standalone Binary, kein Docker)
+- `wiki_query` MCP-Tool: Routing-Modell extrahiert Suchbegriffe → Index-first → Hauptmodell
+  - Multi-Keyword: bis zu 3 Suchbegriffe → separate Suchen → dedupliziert nach Pfad
+- `wiki_ingest` MCP-Tool: POST /tools/wiki_ingest auf MCP-Hub → Trilium ETAPI
+  - Karpathy-Muster: liest Index + verwandte Seiten, integriert mit [[wikilinks]], aktualisiert Index
+- `wiki_lint` MCP-Tool: drei Modi (index / links / full) — alle als Chat-Intents
+  - `index`: baut `schema/index` aus allen Seiten (kein LLM)
+  - `links`: prüft alle [[wikilinks]] auf Existenz (kein LLM)
+  - `full`: links + LLM-Konsistenzcheck (begrenzt auf 20 Seiten — Kontextfenster)
 - `schema/AGENTS.md` Konventionsseite anlegen
-- Code-Modell einbinden (für Intent "code")
-- End-to-End Test: Frage → Wiki-Suche → Antwort
+- Code-Modell: Qwen2.5-Coder 7B für Intent "code"
+- DIRECT_INTENTS: wiki_lint + wiki_ingest geben Tool-Ergebnis direkt zurück — kein LLM-Aufruf
 
-### Phase 5 — Pi Voice Satellite (vollständig lokal)
+### Phase 4.5 — Multi-Agent Architektur (geplant)
+
+Ziel: Den Orchestrator von hardcoded Keyword-Routing auf ein dynamisches, Wiki-gesteuertes Agent-System umbauen.
+Analog zu CLAUDE.md: Agent-Definitionen als Wiki-Seiten, kein Code-Change für neue Agents.
+
+```
+schema/core          ← globaler Systemprompt (Charakter, Constraints) — in jeden LLM-Call injiziert
+schema/agents/wiki   ← Modell: 12B · Trigger-Keywords · Tool: wiki_*
+schema/agents/code   ← Modell: Code-Modell · Trigger-Keywords
+schema/agents/chat   ← Modell: Routing-Modell · Fallback
+schema/agents/search ← Modell: 12B · Tool: web_search
+```
+
+- `intent.py` liest Agent-Definitionen dynamisch aus Trilium statt hardcoded Listen
+- Neuen Agent hinzufügen = neue Wiki-Seite anlegen, kein Code-Change
+- Dokument-Import Feature: Webpage/PDF → atomare Wiki-Notizen (neues MCP Tool)
+
+### Phase 5 — ❌ GESTRICHEN
+
+Alexa Custom Skill wurde gestrichen — Daten laufen über Amazon-Server (widerspricht No-Cloud-Prinzip).
+
+### Phase 6 — Pi Voice Satellite (vollständig lokal)
 
 - Hardware kaufen und zusammenbauen (~48 €)
 - Raspberry Pi OS Lite 64-bit, SSH
 - LXC `jarvis-voice`: wyoming-whisper `:10300`, wyoming-piper `:10200`
 - `wyoming-satellite` auf Pi konfigurieren
 - Orchestrator: Wyoming-Intent-Handler implementieren
-- End-to-End-Test: „Hey <Name>, ...“ ohne Cloud
+- End-to-End-Test: „Hey Jarvis, ..." ohne Amazon Cloud
+- Echo Dot ablösen
 
 ---
 
@@ -635,14 +795,15 @@ services:
 | Routing-Modell | **8B Q4_K_M** (Intent-Klassifikation, schnell) |
 | Code-Modell | **Qwen2.5-Coder 7B Q4_K_M** |
 | Orchestrierung | **LangGraph (Python 3.12)** |
-| Tool-Protokoll | **FastAPI** (REST, Ollama-kompatibler Endpoint) |
-| LLM-Wiki | **Custom (Karpathy-Muster)** als MCP-Tool |
-| Voice Phase 5 | **Wyoming Satellite (Pi Zero 2W + ReSpeaker)** |
-| STT Phase 5 | **wyoming-faster-whisper** (Docker, PVE) |
-| TTS Phase 5 | **wyoming-piper** (Docker, PVE, DE: thorsten-high) |
+| Tool-Protokoll | **Python MCP SDK** |
+| LLM-Wiki Backend | **TriliumNext** (ETAPI, Standalone Binary) |
+| LLM-Wiki Logik | **Custom (Karpathy-Muster)** als MCP-Tool |
+| Voice Phase 6 | **Wyoming Satellite (Pi Zero 2W + ReSpeaker)** |
+| STT Phase 6 | **wyoming-faster-whisper** (Docker, PVE) |
+| TTS Phase 6 | **wyoming-piper** (Docker, PVE, DE: thorsten-high) |
 | Wake Word | **OpenWakeWord** (Pi Zero 2W, CPU) |
 | Chat-Frontend | **Open WebUI** (Docker-in-LXC) |
-| Routing | **Reverse Proxy** (PVE) |
+| Routing | **Bestehender Reverse Proxy** (PVE) |
 | Backup | **proxmox-backup-client** → PBS |
 | Power-Management | **Wake-on-LAN oder Smart Plug + Wake-Manager** |
 

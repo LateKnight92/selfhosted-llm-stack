@@ -1,3 +1,4 @@
+import json
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -10,6 +11,10 @@ from llm import respond, stream_respond, MODEL, CODE_MODEL
 
 app = FastAPI()
 graph = build_graph()
+
+# These intents return the tool result directly — no LLM synthesis needed
+# because the MCP hub already did the work (lint report, ingest status)
+DIRECT_INTENTS = {"wiki_lint", "wiki_ingest"}
 
 class ChatRequest(BaseModel):
     message: str
@@ -26,22 +31,50 @@ def _route(message: str) -> tuple[str, str]:
 def _get_model(intent: str) -> str:
     return CODE_MODEL if intent == "code" else MODEL
 
+def _stream_direct(text: str, model_name: str):
+    # Wraps a plain text result in the Ollama streaming format
+    # so Open WebUI renders it correctly without waiting for a real LLM stream
+    yield json.dumps({
+        "model": model_name,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "message": {"role": "assistant", "content": text},
+        "done": False
+    }) + "\n"
+    yield json.dumps({
+        "model": model_name,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "message": {"role": "assistant", "content": ""},
+        "done": True,
+        "done_reason": "stop"
+    }) + "\n"
+
 @app.post("/chat")
 def chat(req: ChatRequest):
     intent, context = _route(req.message)
+    if intent in DIRECT_INTENTS:
+        return {"response": context or "Done."}
     return {"response": respond(req.message, context, _get_model(intent))}
 
 @app.post("/api/chat")
 def ollama_chat(req: OllamaRequest):
     message = req.messages[-1]["content"] if req.messages else ""
     intent, context = _route(message)
-    model = _get_model(intent)
 
+    if intent in DIRECT_INTENTS:
+        response_text = context or "Done."
+        if req.stream:
+            return StreamingResponse(_stream_direct(response_text, req.model), media_type="application/x-ndjson")
+        return {
+            "model": req.model,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "message": {"role": "assistant", "content": response_text},
+            "done": True,
+            "done_reason": "stop"
+        }
+
+    model = _get_model(intent)
     if req.stream:
-        return StreamingResponse(
-            stream_respond(message, context, model),
-            media_type="application/x-ndjson"
-        )
+        return StreamingResponse(stream_respond(message, context, model), media_type="application/x-ndjson")
     return {
         "model": req.model,
         "created_at": datetime.now(timezone.utc).isoformat(),
